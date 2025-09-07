@@ -1,79 +1,151 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
-using System.Linq;
+using System.IO;
+using System.Threading;
 using System.Windows.Forms;
 using OpenQA.Selenium;
 using OpenQA.Selenium.Chrome;
-using OpenQA.Selenium.Remote;
 
 class Program
 {
-    static void Main()
+    public class Config
     {
-        Screen[] allScreens = Screen.AllScreens;
+        public int DelayInSeconds { get; set; } = 0;
+        public List<UrlAction> UrlActions { get; set; } = new();
+    }
 
-        List<IWebDriver> drivers = new List<IWebDriver>();
+    public class UrlAction
+    {
+        public string Url { get; set; }
+        public int Fullscreen { get; set; }
+    }
 
-        for (int i = 0; i < 3; i++)
+    static void Main(string[] args)
+    {
+        string configPath = args.Length > 0
+            ? args[0]
+            : Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.ini");
+
+        if (!File.Exists(configPath))
+            return;
+
+        Config config;
+        try
         {
-            Rectangle bounds = allScreens[i].Bounds;
+            config = ParseIniConfig(configPath);
+        }
+        catch
+        {
+            return;
+        }
 
-            ChromeOptions options = new ChromeOptions();
+        if (config?.UrlActions == null || config.DelayInSeconds < 0)
+            return;
+
+        Thread.Sleep(config.DelayInSeconds * 1000);
+
+        var allScreens = Screen.AllScreens;
+        var drivers = new List<IWebDriver>();
+
+        for (int i = 0; i < config.UrlActions.Count && i < allScreens.Length; i++)
+        {
+            var action = config.UrlActions[i];
+            var bounds = allScreens[i].Bounds;
+
+            var options = new ChromeOptions();
             options.AddExcludedArgument("enable-automation");
             options.AddAdditionalOption("useAutomationExtension", false);
 
             var service = ChromeDriverService.CreateDefaultService();
             service.HideCommandPromptWindow = true;
 
-            IWebDriver driver = new ChromeDriver(service, options);
-
-            System.Threading.Thread.Sleep(1000);
+            var driver = new ChromeDriver(service, options);
+            Thread.Sleep(1000);
 
             driver.Manage().Window.Position = new Point(bounds.X, bounds.Y);
             driver.Manage().Window.Size = new Size(bounds.Width, bounds.Height);
             driver.Manage().Window.Maximize();
 
+            driver.Navigate().GoToUrl(action.Url);
             drivers.Add(driver);
         }
 
-        foreach (var driver in drivers)
+        for (int i = 0; i < config.UrlActions.Count && i < drivers.Count; i++)
         {
-            driver.Navigate().GoToUrl("https://example.com");
-            driver.Manage().Window.FullScreen();
-        }
-
-        while (true)
-        {
-            bool allClosed = true;
-
-            foreach (var driver in drivers.ToList())
+            if (config.UrlActions[i].Fullscreen == 1)
             {
                 try
                 {
-                    if (driver.WindowHandles.Count > 0)
+                    drivers[i].Manage().Window.FullScreen();
+                }
+                catch { }
+            }
+        }
+
+        while (drivers.Count > 0)
+        {
+            for (int i = drivers.Count - 1; i >= 0; i--)
+            {
+                try
+                {
+                    if (drivers[i].WindowHandles.Count == 0)
                     {
-                        allClosed = false;
-                        break;
+                        drivers[i].Quit();
+                        drivers.RemoveAt(i);
                     }
                 }
-                catch (WebDriverException)
+                catch
                 {
-                    drivers.Remove(driver);
+                    try { drivers[i].Quit(); } catch { }
+                    drivers.RemoveAt(i);
                 }
-            }
-
-            if (allClosed)
-            {
-                break;
             }
 
             Thread.Sleep(1000);
         }
+    }
 
-        foreach (var driver in drivers)
+    static Config ParseIniConfig(string path)
+    {
+        var config = new Config();
+        var lines = File.ReadAllLines(path);
+        UrlAction currentAction = null;
+
+        foreach (var rawLine in lines)
         {
-            try { driver.Quit(); } catch { }
+            var line = rawLine.Trim();
+            if (string.IsNullOrEmpty(line) || line.StartsWith("#") || line.StartsWith(";"))
+                continue;
+
+            if (line.StartsWith("[") && line.EndsWith("]"))
+            {
+                currentAction = line.Equals("[Settings]", StringComparison.OrdinalIgnoreCase) ? null : new UrlAction();
+                if (currentAction != null)
+                    config.UrlActions.Add(currentAction);
+                continue;
+            }
+
+            var parts = line.Split('=', 2);
+            if (parts.Length != 2) continue;
+
+            var key = parts[0].Trim();
+            var value = parts[1].Trim();
+
+            if (currentAction == null)
+            {
+                if (key.Equals("DelayInSeconds", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out var delay))
+                    config.DelayInSeconds = delay;
+            }
+            else
+            {
+                if (key.Equals("Url", StringComparison.OrdinalIgnoreCase))
+                    currentAction.Url = value;
+                else if (key.Equals("Fullscreen", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out var fullscreen))
+                    currentAction.Fullscreen = fullscreen;
+            }
         }
+
+        return config;
     }
 }
