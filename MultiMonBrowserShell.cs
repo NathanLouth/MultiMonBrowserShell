@@ -46,64 +46,93 @@ class Program
         Thread.Sleep(config.DelayInSeconds * 1000);
 
         var allScreens = Screen.AllScreens;
-        var drivers = new List<IWebDriver>();
+        if (config.UrlActions.Count == 0 || allScreens.Length == 0)
+            return;
 
-        for (int i = 0; i < config.UrlActions.Count && i < allScreens.Length; i++)
+        var options = new ChromeOptions();
+        options.AddExcludedArgument("enable-automation");
+        options.AddAdditionalOption("useAutomationExtension", false);
+
+        var service = ChromeDriverService.CreateDefaultService();
+        service.HideCommandPromptWindow = true;
+
+        using var driver = new ChromeDriver(service, options);
+        var windowHandles = new List<string>();
+
+        var firstAction = config.UrlActions[0];
+        driver.Navigate().GoToUrl(firstAction.Url);
+        Thread.Sleep(1000);
+
+        var firstBounds = allScreens[0].Bounds;
+        driver.Manage().Window.Position = new Point(firstBounds.X, firstBounds.Y);
+        driver.Manage().Window.Size = new Size(firstBounds.Width, firstBounds.Height);
+        driver.Manage().Window.Maximize();
+
+        windowHandles.Add(driver.CurrentWindowHandle);
+
+        for (int i = 1; i < config.UrlActions.Count && i < allScreens.Length; i++)
         {
             var action = config.UrlActions[i];
-            var bounds = allScreens[i].Bounds;
 
-            var options = new ChromeOptions();
-            options.AddExcludedArgument("enable-automation");
-            options.AddAdditionalOption("useAutomationExtension", false);
+            driver.SwitchTo().NewWindow(WindowType.Window);
+            Thread.Sleep(500);
 
-            var service = ChromeDriverService.CreateDefaultService();
-            service.HideCommandPromptWindow = true;
+            var handles = driver.WindowHandles;
+            var newHandle = "";
+            foreach (var h in handles)
+            {
+                if (!windowHandles.Contains(h))
+                {
+                    newHandle = h;
+                    break;
+                }
+            }
+            driver.SwitchTo().Window(newHandle);
 
-            var driver = new ChromeDriver(service, options);
+            driver.Navigate().GoToUrl(action.Url);
             Thread.Sleep(1000);
 
+            var bounds = allScreens[i].Bounds;
             driver.Manage().Window.Position = new Point(bounds.X, bounds.Y);
             driver.Manage().Window.Size = new Size(bounds.Width, bounds.Height);
             driver.Manage().Window.Maximize();
 
-            driver.Navigate().GoToUrl(action.Url);
-            drivers.Add(driver);
+            windowHandles.Add(newHandle);
         }
 
-        for (int i = 0; i < config.UrlActions.Count && i < drivers.Count; i++)
+        for (int i = 0; i < config.UrlActions.Count && i < windowHandles.Count; i++)
         {
             if (config.UrlActions[i].Fullscreen == 1)
             {
                 try
                 {
-                    drivers[i].Manage().Window.FullScreen();
-                }
-                catch { }
-            }
-        }
-
-        while (drivers.Count > 0)
-        {
-            for (int i = drivers.Count - 1; i >= 0; i--)
-            {
-                try
-                {
-                    if (drivers[i].WindowHandles.Count == 0)
-                    {
-                        drivers[i].Quit();
-                        drivers.RemoveAt(i);
-                    }
+                    driver.SwitchTo().Window(windowHandles[i]);
+                    driver.Manage().Window.FullScreen();
                 }
                 catch
                 {
-                    try { drivers[i].Quit(); } catch { }
-                    drivers.RemoveAt(i);
+                  
                 }
+            }
+        }
+
+        while (true)
+        {
+            try
+            {
+                var handles = driver.WindowHandles;
+                if (handles.Count == 0)
+                    break;
+            }
+            catch
+            {
+                break;
             }
 
             Thread.Sleep(1000);
         }
+
+        driver.Quit();
     }
 
     static Config ParseIniConfig(string path)
