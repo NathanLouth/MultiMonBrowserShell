@@ -75,7 +75,7 @@ class Program
             var action = config.UrlActions[i];
 
             driver.SwitchTo().NewWindow(WindowType.Window);
-            Thread.Sleep(500);
+            Thread.Sleep(1000);
 
             var handles = driver.WindowHandles;
             var newHandle = "";
